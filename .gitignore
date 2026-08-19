@@ -1,3 +1,19 @@
+# Secrets
 .env
-venv
-__pycache__
+
+# Virtualenvs
+venv/
+rag/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# OS
+.DS_Store
+
+# Generated artifacts -- regenerate with scripts/scrape_arxiv.py + build_index.py
+data/*.pdf
+data/*.txt
+bm25_values.json

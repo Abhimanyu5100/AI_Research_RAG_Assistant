@@ -1,22 +1,35 @@
-langgraph 
-langsmith 
-langchain_groq 
-langchain_community 
-langchain 
-langchain-pinecone 
-pinecone-client 
-arxiv 
-Wikipedia
-arxiv
+# --- Web layer ---
+fastapi
+uvicorn
+streamlit
+pydantic
 requests
-PyMuPDF
-nltk
-torch 
-torchvision 
-torchaudio
+
+# --- Agent / LLM ---
+langgraph
+langsmith
+langchain
+langchain-core
+langchain-community
+langchain-groq
+langchain-text-splitters
+langchain-huggingface        # HuggingFaceEmbeddings (the community one is deprecated)
+
+# --- Vector store ---
+langchain-pinecone
+pinecone
+pinecone-text                # BM25Encoder for the sparse half of hybrid search
+
+# --- Embeddings ---
 sentence-transformers
-transformers 
-accelerate 
-bitsandbytes
-numpy
-pandas
+transformers
+torch
+
+# --- Tools / data sources ---
+arxiv
+wikipedia                    # lowercase: the PyPI name is case-sensitive on some installs
+pypdf                        # used by PyPDFLoader in scripts/scrape_arxiv.py
+
+# --- Utilities ---
+python-dotenv                # src/config.py calls load_dotenv()
+tqdm                         # progress bars in scripts/build_index.py
