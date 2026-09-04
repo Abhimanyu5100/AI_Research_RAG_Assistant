@@ -1,5 +1,8 @@
+import json
 import logging
+import re
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -10,12 +13,31 @@ from langchain_core.messages import RemoveMessage
 from pydantic import BaseModel, Field
 
 from src.agent.graph import graph
+from src.agent.tools import DEGRADED
 from src.config import CHAT_MODEL
 
-# Emitted when the critique step supersedes a draft answer: everything streamed
-# before it should be discarded by the client. Form feed will not occur in
-# normal model output.
-SUPERSEDE = "\x0c"
+# The stream is newline-delimited JSON so that reasoning steps, answer tokens,
+# citations and notices can share one connection. A client buffers until it sees
+# a newline, which also makes partial chunks safe to handle.
+#   {"type":"reason",    "text": ...}  progress step, shown above the answer
+#   {"type":"token",     "text": ...}  answer text
+#   {"type":"supersede"}               discard answer streamed so far
+#   {"type":"sources",   "items":[..]} citations
+#   {"type":"notice",    "text": ...}  degraded capability warning
+#   {"type":"error",     "text": ...}  failure
+
+STEP_LABELS = {
+    "classify": "Sorting the question",
+    "QueryFramer": "Reframing the question for retrieval",
+    "summarizer": "Searching the paper corpus",
+    "tools": "Calling external sources",
+    "chatbot": "Drafting the answer",
+    "critique": "Checking the answer against sources",
+}
+
+
+def _event(**kw) -> str:
+    return json.dumps(kw, ensure_ascii=False) + "\n"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,43 +88,112 @@ async def chat_endpoint(request: QueryRequest):
     async def stream_generator():
         streamed_any = False
         current_step = None
+        started = time.monotonic()
+        # Best-effort: this registry is process-wide, so with concurrent requests
+        # a notice may reflect another caller's failed lookup.
+        DEGRADED.clear()
+
+        def elapsed() -> str:
+            return f"{time.monotonic() - started:.1f}s"
+
         try:
-            async for msg, metadata in graph.astream(
-                # Per-turn state is cleared by the graph's `prepare` node, so
-                # callers only have to supply the new message.
+            async for mode, chunk in graph.astream(
                 {"messages": [("user", request.message)]},
-                stream_mode="messages",
+                stream_mode=["updates", "messages"],
                 config=config,
             ):
+                if mode == "updates":
+                    for node, payload in (chunk or {}).items():
+                        label = STEP_LABELS.get(node)
+                        if not label:
+                            continue
+                        detail = ""
+                        if node == "classify" and isinstance(payload, dict):
+                            ml = payload.get("ml_parts") or []
+                            gen = payload.get("general_parts") or []
+                            if ml and gen:
+                                detail = (f": {len(ml)} research + {len(gen)} general "
+                                          "part(s), handled separately")
+                            elif ml:
+                                detail = ": research question"
+                            else:
+                                detail = ": general question"
+                        elif node == "QueryFramer" and isinstance(payload, dict):
+                            refined = (payload.get("refined_query") or "").strip()
+                            if refined:
+                                detail = f": {refined}"
+                        elif node == "summarizer" and isinstance(payload, dict):
+                            cites = payload.get("citations") or []
+                            detail = (f": {len(cites)} paper(s) used"
+                                      if cites else ": no relevant papers, using general knowledge")
+                        yield _event(type="reason", text=f"[{elapsed()}] {label}{detail}")
+                    continue
+
+                msg, metadata = chunk
                 if metadata.get("langgraph_node") != "chatbot" or not msg.content:
                     continue
 
-                # A second pass through `chatbot` means the critique node asked
-                # for a revision, so the draft already on the wire is stale.
                 step = metadata.get("langgraph_step")
                 if streamed_any and step != current_step:
-                    yield SUPERSEDE
+                    yield _event(type="supersede")
                 current_step = step
 
                 streamed_any = True
-                yield msg.content
+                yield _event(type="token", text=msg.content)
 
             state = await graph.aget_state(config)
-            citations = (state.values or {}).get("citations") or []
+            values = state.values or {}
+
+            if DEGRADED:
+                names = ", ".join(sorted(DEGRADED))
+                used_corpus = bool((values or {}).get("citations"))
+                fallback = ("the indexed papers and the model's own knowledge"
+                            if used_corpus else "the model's own knowledge")
+                yield _event(type="notice", text=(
+                    f"External lookup unavailable ({names}). Answered from {fallback}."))
+
+            fallback_model = values.get("model_fallback")
+            if fallback_model:
+                yield _event(type="notice", text=(
+                    f"The main model was rate limited, so this was answered by "
+                    f"{fallback_model}. Quality may be lower."))
+
+            citations = values.get("citations") or []
             if citations:
-                yield "\n\n**Sources:** " + ", ".join(citations)
+                yield _event(type="sources", items=citations)
+
+            yield _event(type="reason", text=f"[{elapsed()}] Done")
 
         except Exception as exc:
-            # The 200 and headers are already on the wire by this point, so the
-            # only way to report a failure is in the body. Without this the
-            # client just sees the connection cut ("response ended prematurely").
             logger.exception("Error while streaming response")
-            prefix = "\n\n" if streamed_any else ""
-            yield f"{prefix}⚠️ The assistant hit an error: {type(exc).__name__}: {exc}"
+            text = str(exc)
+            low = text.lower()
+            if "error code: 403" in low or "access denied" in low:
+                yield _event(type="error", text=(
+                    "The model provider refused the connection (HTTP 403). This is "
+                    "usually the network rather than the app: Groq blocks many VPN, "
+                    "proxy and datacentre IP ranges. Try disconnecting a VPN or "
+                    "switching network, then check with:\n"
+                    "  curl -s -o /dev/null -w '%{http_code}' https://api.groq.com/openai/v1/models"))
+            elif "error code: 401" in low or "authentication" in low:
+                yield _event(type="error", text=(
+                    "The model provider rejected the API key (HTTP 401). Check "
+                    "GROQ_API_KEY in your .env file."))
+            elif "rate_limit_exceeded" in text or "Error code: 429" in text:
+                wait = re.search(r"try again in ([0-9hms.]+)", text)
+                friendly = "The model provider's rate limit has been reached."
+                if wait:
+                    friendly += f" It should clear in about {wait.group(1)}."
+                friendly += (" You can also set GROQ_CHAT_MODEL to a smaller model "
+                             "in .env, or upgrade the Groq plan.")
+                yield _event(type="error", text=friendly)
+            else:
+                yield _event(type="error",
+                             text=f"The assistant hit an error: {type(exc).__name__}: {exc}")
 
     return StreamingResponse(
         stream_generator(),
-        media_type="text/plain",
+        media_type="application/x-ndjson; charset=utf-8",
         headers={"X-Session-Id": session_id},
     )
 
