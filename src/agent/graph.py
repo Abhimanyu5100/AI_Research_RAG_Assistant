@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Annotated, List, Literal
 
 from langchain_core.messages import (
@@ -305,9 +306,15 @@ def chatbot(state: State) -> dict:
     # The assistant specialises in AI/ML but is not limited to it: deflecting a
     # general question with "I only answer ML questions" is a worse answer than
     # looking it up. Searching is preferred over both guessing and declining.
+    # The model has no clock. Without this, "is today ...?" questions are
+    # answered against its training cutoff and are silently wrong.
+    today = datetime.now().astimezone()
     system = (
         "You are a helpful research assistant. Your speciality is AI and machine "
         "learning, and you also answer general questions on any topic.\n\n"
+        f"Today's date is {today:%A, %d %B %Y} ({today:%Z}). Use it for any "
+        "question about the current date, or about what is recent or upcoming. "
+        "Do not rely on your own sense of the current date.\n\n"
         "When you are not confident about a fact -- anything recent, or about "
         "people, events, organisations, products, places or figures -- use the "
         "available search tools before answering. Prefer searching over guessing, "

@@ -196,6 +196,10 @@ All settings live in `src/config.py` and can be overridden through `.env`.
 | `MAX_CRITIQUE_RETRIES` | `1` | Answer revisions allowed |
 | `CRITIQUE_REQUIRES_CONTEXT` | `true` | Only review answers that have retrieved sources |
 
+The current date is injected into the system prompt, so questions about today
+or about what is recent are answered against the clock rather than the model's
+training cutoff.
+
 Groq's model lineup changes over time. To see what your key can reach:
 
 ```bash
