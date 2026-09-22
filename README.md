@@ -98,7 +98,11 @@ src/
     retriever.py  Pinecone hybrid retrieval
     tools.py      Tavily / arXiv / Wikipedia, bounded and retried
   api/main.py     FastAPI backend, newline-delimited JSON stream
-frontend/app.py   Streamlit chat UI with multiple conversations
+web/              Next.js frontend (the UI)
+  src/app/        routes, layout, global styles
+  src/components/ chat, sidebar, composer, markdown renderer
+  src/lib/        NDJSON stream reader, chat persistence, types
+frontend/app.py   legacy Streamlit UI, kept as a fallback
 scripts/
   scrape_arxiv.py fetch papers from arXiv
   build_index.py  build the Pinecone index
@@ -118,7 +122,8 @@ data/             downloaded PDFs and extracted text
 | Vector store | Pinecone serverless, hybrid dense + sparse (`dotproduct`) |
 | Embeddings | `intfloat/e5-large-v2` via Sentence-Transformers, computed locally |
 | Sparse retrieval | BM25 fitted on the corpus |
-| Backend / UI | FastAPI streaming, Streamlit |
+| Backend | FastAPI, newline-delimited JSON streaming |
+| Frontend | Next.js (App Router), React, Tailwind CSS, shadcn/ui |
 
 ---
 
@@ -161,15 +166,37 @@ index is populated, and that retrieval returns documents with citation metadata.
 
 ### 5. Run
 
+Both servers together:
+
+```bash
+./scripts/dev.sh
+```
+
+Or separately, in two terminals:
+
 ```bash
 uvicorn src.api.main:app --reload --port 8000
 ```
 
 ```bash
+cd web && npm install && npm run dev
+```
+
+Then open <http://localhost:3000>. The frontend proxies `/api/*` to the backend,
+so the browser never makes a cross-origin request; point it elsewhere with
+`BACKEND_ORIGIN`.
+
+<details>
+<summary>Legacy Streamlit UI</summary>
+
+The original Streamlit interface still works against the same backend:
+
+```bash
 streamlit run frontend/app.py
 ```
 
-Then open <http://localhost:8501>.
+It is kept as a fallback and does not receive new features.
+</details>
 
 ---
 
@@ -241,6 +268,28 @@ same setting.
 
 ---
 
+## Interface
+
+The frontend renders the stream as it arrives.
+
+- **Reasoning** appears in a collapsible panel above each answer, with per-step
+  timings. Collapsed, it shows the current step so progress stays visible.
+- **Citations** render as chips under the answer, naming the papers used.
+- **Maths** is typeset with KaTeX. Models emit `\(...\)` and `\[...\]`, which are
+  rewritten to `$` and `$$`; the rewrite needs a closing delimiter, so an
+  equation still arriving is left alone until it completes.
+- **Wide tables** scroll horizontally rather than compressing cells.
+- **Revisions** replace the draft in place when the critique step supersedes it.
+- **Conversations** persist in `localStorage`, so a refresh keeps the transcript.
+  Each chat maps to its own backend `session_id`; deleting one clears its
+  history on the server too.
+- **Stop** cancels an in-flight answer.
+
+Dark and light themes are both supported, following the system preference by
+default.
+
+---
+
 ## Streaming protocol
 
 `POST /chat` responds with newline-delimited JSON so reasoning, answer text and
@@ -274,11 +323,12 @@ Conversations are keyed by `session_id`, sent by the frontend and returned in
 the `X-Session-Id` header. Callers with different ids have independent
 histories; `POST /reset` clears one.
 
-> Chats live in Streamlit's per-browser session state, so a page refresh starts
-> a fresh list. Conversation state lives in LangGraph's in-process
-> `MemorySaver`, so it resets when the server restarts. For a long-running
-> deployment, swap in a persistent checkpointer such as SQLite or Postgres in
-> `src/agent/graph.py`.
+> Transcripts are stored in the browser's `localStorage` and survive a refresh.
+> The server's own conversation state lives in LangGraph's in-process
+> `MemorySaver`, so it resets when the backend restarts — after which a restored
+> transcript is still readable, but the model no longer remembers it. For a
+> long-running deployment, swap in a persistent checkpointer such as SQLite or
+> Postgres in `src/agent/graph.py`.
 
 ---
 
