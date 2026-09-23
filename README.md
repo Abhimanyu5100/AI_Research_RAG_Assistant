@@ -4,13 +4,13 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-stateful%20agent-1C3C3C)](https://langchain-ai.github.io/langgraph/)
 [![Pinecone](https://img.shields.io/badge/Pinecone-hybrid%20index-0B0B0B?logo=pinecone&logoColor=white)](https://www.pinecone.io/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-streaming%20API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-chat%20UI-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Next.js](https://img.shields.io/badge/Next.js-chat%20UI-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A LangGraph agent for research questions in AI and machine learning. It combines
 retrieval over a corpus of arXiv papers with query decomposition, context
 summarization, self-critique and external search, served through a streaming
-FastAPI backend and a Streamlit chat interface.
+FastAPI backend and a Next.js chat interface.
 
 ---
 
@@ -61,7 +61,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as Streamlit UI
+    participant U as Browser
     participant A as FastAPI
     participant G as LangGraph
     participant P as Pinecone
@@ -380,6 +380,14 @@ split across stream chunks. No test framework required.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+## Design
+
+[DESIGN.md](DESIGN.md) records why the system is built this way: the
+constraints it works under, the decisions taken and the alternatives rejected.
+Read it before changing retrieval, the token budget or the graph.
 
 ---
 
